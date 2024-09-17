@@ -155,10 +155,7 @@ def filter_by_ratio(adata, end_cycle, start_cycle, label="DAPI", min_ratio=0.5, 
 
 def filter_by_annotation(adata, path_to_geojson) -> ad.AnnData:
     """ Filter cells by annotation in a geojson file """
-
-    #TODO: order the legend and the value counts text box
-
-    logger.info(" ---- filter_by_annotation : version number 1.0.0 ----")
+    logger.info(" ---- filter_by_annotation : version number 1.1.0 ----")
     time_start = time.time()
     
     gdf = gpd.read_file(path_to_geojson)
@@ -167,31 +164,34 @@ def filter_by_annotation(adata, path_to_geojson) -> ad.AnnData:
     logger.info(f"GeoJson loaded, detected: {len(gdf)} annotations")
 
     adata.obs['point_geometry'] = adata.obs.apply(lambda cell: shapely.geometry.Point( cell['X_centroid'], cell['Y_centroid']), axis=1)
+    
     def label_point_if_inside_polygon(point, polygons):
         for i, polygon in enumerate(polygons):
             if polygon.contains(point):
                 return f"ann_{i+1}"
-        return True
-    adata.obs['filter_by_ann'] = adata.obs['point_geometry'].apply(lambda cell: label_point_if_inside_polygon(cell, gdf.geometry))
+        return "not_found"
+    
+    adata.obs['ann'] = adata.obs['point_geometry'].apply(lambda cell: label_point_if_inside_polygon(cell, gdf.geometry))
+    adata.obs['filter_by_ann'] = adata.obs['ann'] == "not_found"
     logger.info("Labelled cells with annotations if they were found inside")
 
     #plotting
-    labels_to_plot = list(adata.obs['filter_by_ann'].unique())
-    labels_to_plot.remove(True)
+    labels_to_plot = list(adata.obs['ann'].unique())
+    labels_to_plot.remove("not_found")
     max_x, max_y = adata.obs[['X_centroid', 'Y_centroid']].max()
 
-    tmp_df_ann = adata.obs[adata.obs['filter_by_ann'].isin(labels_to_plot)]
-    tmp_df_Keep = adata.obs[adata.obs['filter_by_ann']==True].sample(frac=0.2, random_state=0).reset_index(drop=True)
+    tmp_df_ann = adata.obs[adata.obs['ann'].isin(labels_to_plot)]
+    tmp_df_Keep = adata.obs[adata.obs['ann']=="not_found"].sample(frac=0.2, random_state=0).reset_index(drop=True)
 
-    sns.scatterplot(data=tmp_df_Keep, x='X_centroid', y='Y_centroid', hue='filter_by_ann', palette='grey', linewidth=0, s=3, alpha=0.1)
-    sns.scatterplot(data=tmp_df_ann, x='X_centroid', y='Y_centroid', hue='filter_by_ann', palette='bright', linewidth=0, s=8)
+    sns.scatterplot(data=tmp_df_Keep, x='X_centroid', y='Y_centroid', hue='ann', palette='grey', linewidth=0, s=3, alpha=0.1)
+    sns.scatterplot(data=tmp_df_ann, x='X_centroid', y='Y_centroid', hue='ann', palette='bright', linewidth=0, s=8)
 
     plt.xlim(0, max_x)
     plt.ylim(max_y, 0)
     plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0., markerscale=3)
 
     # Show value counts
-    value_counts = tmp_df_ann['filter_by_ann'].value_counts()
+    value_counts = tmp_df_ann['ann'].value_counts()
     value_counts_str = "\n".join([f"{cat}: {count}" for cat, count in value_counts.items()])
 
     plt.gca().text(1.35, 1, f"Cells Counts:\n{value_counts_str}",
@@ -201,6 +201,9 @@ def filter_by_annotation(adata, path_to_geojson) -> ad.AnnData:
             bbox=dict(facecolor='white', alpha=0.8, edgecolor='black'))
 
     plt.show()
+
+    #drop object columns ( this would block saving to h5ad)
+    adata.obs = adata.obs.drop(columns=['point_geometry', 'ann'])
 
     logger.info(f" ---- filter_by_annotation is done, took {int(time.time() - time_start)}s  ----")
     return adata
