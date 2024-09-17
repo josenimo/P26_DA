@@ -208,7 +208,6 @@ def filter_by_annotation(adata, path_to_geojson) -> ad.AnnData:
     logger.info(f" ---- filter_by_annotation is done, took {int(time.time() - time_start)}s  ----")
     return adata
 
-
 def filter_by_abs_value(adata, marker, value=None, quantile=None, direction='above') -> ad.AnnData:
     """ Filter cells by absolute value """
 
