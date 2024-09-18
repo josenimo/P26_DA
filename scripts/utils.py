@@ -153,9 +153,9 @@ def filter_by_ratio(adata, end_cycle, start_cycle, label="DAPI", min_ratio=0.5, 
 
     return adata
 
-def filter_by_annotation(adata, path_to_geojson) -> ad.AnnData:
+def filter_by_annotation(adata, path_to_geojson, column_name="filter_by_ann") -> ad.AnnData:
     """ Filter cells by annotation in a geojson file """
-    logger.info(" ---- filter_by_annotation : version number 1.1.0 ----")
+    logger.info(" ---- filter_by_annotation : version number 1.2.0 ----")
     time_start = time.time()
     
     gdf = gpd.read_file(path_to_geojson)
@@ -172,7 +172,7 @@ def filter_by_annotation(adata, path_to_geojson) -> ad.AnnData:
         return "not_found"
     
     adata.obs['ann'] = adata.obs['point_geometry'].apply(lambda cell: label_point_if_inside_polygon(cell, gdf.geometry))
-    adata.obs['filter_by_ann'] = adata.obs['ann'] == "not_found"
+    adata.obs[column_name] = adata.obs['ann'] == "not_found"
     logger.info("Labelled cells with annotations if they were found inside")
 
     #plotting
