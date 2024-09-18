@@ -12,6 +12,9 @@ import seaborn as sns
 import shapely
 import geopandas as gpd
 
+import scimap as sm
+
+
 def read_quant(csv_data_path) -> ad.AnnData:
     """
     Read the quantification data from a csv file and return an anndata object
@@ -174,6 +177,7 @@ def filter_by_annotation(adata, path_to_geojson, column_name="filter_by_ann") ->
     adata.obs['ann'] = adata.obs['point_geometry'].apply(lambda cell: label_point_if_inside_polygon(cell, gdf.geometry))
     adata.obs[column_name] = adata.obs['ann'] == "not_found"
     logger.info("Labelled cells with annotations if they were found inside")
+    logger.info(f"Number of cells not found inside any annotation: {sum(adata.obs[column_name])}")
 
     #plotting
     labels_to_plot = list(adata.obs['ann'].unique())
@@ -251,3 +255,61 @@ def filter_by_abs_value(adata, marker, value=None, quantile=None, direction='abo
 
     logger.info(f" ---- filter_by_abs_value is done, took {int(time.time() - time_start)}s  ----")
     return adata
+
+def negate_var_by_ann(adata, path_to_geojson, marker_column, value_to_impute, label) -> ad.AnnData:
+
+    # first label adata
+    adata = filter_by_annotation(adata, path_to_geojson, column_name=label)
+
+    # create array of data to correct
+    array = adata[:,marker_column].X.toarray()
+
+    logger.info( f" how many zeroes: {np.count_nonzero(array==value_to_impute)}")
+    logger.info( f"array shape {array.shape}")
+    logger.info( f"array mean {array.mean()}")
+    logger.info( f"data type {type(array)}")
+
+    # impute values
+    array[~adata.obs[label].values] = value_to_impute
+
+    logger.info( f" how many zeroes after: {np.count_nonzero(array==value_to_impute)}")
+    logger.info( f"array shape {array.shape}")
+    logger.info( f"array mean {array.mean()}")
+
+    # replace array in adata
+    adata[:,marker_column].X = array
+
+    return adata
+
+def phenotype_with_gate_change(adata, gates, phenotype_matrix, sample_id, marker, new_gate):
+    adata_copy = adata.copy()
+    gates_copy = gates.copy()
+
+    # change the gate value
+    logger.info(f"Changing the value from {gates_copy.loc[gates_copy['marker_id']==marker, 'gate_value'].values[0]} to {new_gate}")
+
+    gates_copy.loc[gates_copy['marker_id']==marker, 'gate_value'] = new_gate
+    gates_copy.loc[gates_copy['marker_id']==marker, 'log1p_gate_value'] = np.log1p(new_gate)
+    processed_gates = process_gates_for_sm(gates_copy, sample_id)
+
+    logger.info(f"processed gate {processed_gates.loc[processed_gates['marker']==marker]}")
+
+    # rescale adata
+    adata_copy = sm.pp.rescale(adata_copy, gate=processed_gates, log=True, verbose=True)
+    adata_copy = sm.tl.phenotype_cells (adata_copy, phenotype=phenotype_matrix, label="phenotype")
+
+    custom_colours = {
+        "Cancer_cells" : "red",
+        "CD4_Tcells" : "peru",
+        "CD8_Tcells" : "lawngreen",
+        "Macrophages" : "yellow",
+        "COL1A1_cells" : "deepskyblue",
+        "Vimentin_cells" : "orange",
+        "B_cells" : "black",
+        "Unknown" : "whitesmoke"
+    }
+
+    sm.pl.spatial_scatterPlot (adata_copy, colorBy = ['phenotype'],figsize=(12,7), s=1, fontsize=10, customColors=custom_colours)
+    
+
+
