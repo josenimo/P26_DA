@@ -21,11 +21,12 @@ def read_quant(csv_data_path) -> ad.AnnData:
     :param csv_data_path: path to the csv file
     :return: an anndata object
     """
-    logger.info(" ---- read_quant : version number 1.0.0 ----")
+    logger.info(" ---- read_quant : version number 1.1.0 ----")
     time_start = time.time()
 
     assert csv_data_path.endswith('.csv'), "The file should be a csv file"
     df = pd.read_csv(csv_data_path)
+    df.index = df.index.astype(str)
 
     meta_columns = ['CellID', 'Y_centroid', 'X_centroid',
         'Area', 'MajorAxisLength', 'MinorAxisLength', 'Eccentricity',
@@ -44,12 +45,11 @@ def read_quant(csv_data_path) -> ad.AnnData:
     logger.info(f" ---- read_quant is done, took {int(time.time() - time_start)}s  ----")
     return adata
     
-def read_gates(gates_csv_path) -> pd.DataFrame:
-    """
-    Read the gates data from a csv file and return a dataframe
-    """
-    logger.info(" ---- read_gates : version number 1.0.0 ----")
+def read_gates(gates_csv_path, sample_id=None) -> pd.DataFrame:
+    """ Read the gates data from a csv file and return a dataframe """
+    logger.info(" ---- read_gates : version number 1.1.0 ----")
     time_start = time.time()
+
     assert gates_csv_path.endswith('.csv'), "The file should be a csv file"
     gates = pd.read_csv(gates_csv_path)
     
@@ -57,6 +57,13 @@ def read_gates(gates_csv_path) -> pd.DataFrame:
     assert "gate_value" in gates.columns, "The column gate_value is not present in the csv file"
     gates = gates[gates.gate_value != 0.0]
     logger.info(f"  Found {gates.shape[0]} valid gates")
+    logger.info(f"  Markers found: {gates.marker_id.unique()}")
+    logger.info(f"  Samples found: {gates.sample_id.unique()}")
+
+    if sample_id is not None:
+        assert "sample_id" in gates.columns, "The column sample_id is not present in the csv file"
+        gates = gates[gates['sample_id']==sample_id]
+        logger.info(f"  Found {gates.shape[0]} valid gates for sample {sample_id}")
 
     logger.info(f" ---- read_gates is done, took {int(time.time() - time_start)}s  ----")
     return gates
@@ -77,11 +84,13 @@ def filter_adata_by_gates(adata: ad.AnnData, gates: pd.DataFrame, sample_id=None
 
 def process_gates_for_sm(gates:pd.DataFrame, sample_id:int) -> pd.DataFrame:
     """ Process gates dataframe to be in log1p scale """
-    logger.info(" ---- process_gates_for_sm : version number 1.0.0 ----")
+    logger.info(" ---- process_gates_for_sm : version number 1.2.0 ----")
     time_start = time.time()
 
-    gates['log1p_gate_value'] = np.log1p(gates.gate_value)
-    gates_for_scimap = gates[['marker_id', 'log1p_gate_value']]
+    df = gates.copy()
+
+    df['log1p_gate_value'] = np.log1p(gates.gate_value)
+    gates_for_scimap = df[['marker_id', 'log1p_gate_value']]
     gates_for_scimap.rename(columns={'marker_id': 'marker', 'log1p_gate_value': sample_id}, inplace=True)
 
     logger.info(f" ---- process_gates_for_sm is done, took {int(time.time() - time_start)}s  ----")
@@ -281,12 +290,13 @@ def negate_var_by_ann(adata, path_to_geojson, marker_column, value_to_impute, la
 
     return adata
 
-def phenotype_with_gate_change(adata, gates, phenotype_matrix, sample_id, marker, new_gate):
+def phenotype_with_gate_change(adata, gates, phenotype_matrix, sample_id, marker, new_gate, adata_in_place=False):
+    """ Plot the spatial scatter plot with the new gate value """
+
+    logger.info(" ---- phenotype_with_gate_change : version number 1.0.0 ----")
+
     adata_copy = adata.copy()
     gates_copy = gates.copy()
-
-    # change the gate value
-    logger.info(f"Changing the value from {gates_copy.loc[gates_copy['marker_id']==marker, 'gate_value'].values[0]} to {new_gate}")
 
     gates_copy.loc[gates_copy['marker_id']==marker, 'gate_value'] = new_gate
     gates_copy.loc[gates_copy['marker_id']==marker, 'log1p_gate_value'] = np.log1p(new_gate)
@@ -295,8 +305,8 @@ def phenotype_with_gate_change(adata, gates, phenotype_matrix, sample_id, marker
     logger.info(f"processed gate {processed_gates.loc[processed_gates['marker']==marker]}")
 
     # rescale adata
-    adata_copy = sm.pp.rescale(adata_copy, gate=processed_gates, log=True, verbose=True)
-    adata_copy = sm.tl.phenotype_cells (adata_copy, phenotype=phenotype_matrix, label="phenotype")
+    adata_copy = sm.pp.rescale(adata_copy, gate=processed_gates, log=True, verbose=False)
+    adata_copy = sm.tl.phenotype_cells (adata_copy, phenotype=phenotype_matrix, label="phenotype", verbose=False)
 
     custom_colours = {
         "Cancer_cells" : "red",
@@ -311,5 +321,14 @@ def phenotype_with_gate_change(adata, gates, phenotype_matrix, sample_id, marker
 
     sm.pl.spatial_scatterPlot (adata_copy, colorBy = ['phenotype'],figsize=(12,7), s=1, fontsize=10, customColors=custom_colours)
     
+    # Get the current figure
+    fig = plt.gcf()
+    ax = plt.gca()
+    plt.table(cellText=gates_copy.values, colLabels=gates_copy.columns, loc='upper right', cellLoc='center')
+    plt.show()
+
+    if adata_in_place:
+        logger.info(" phenotyping saved in adata object")
+        return adata_copy
 
 
