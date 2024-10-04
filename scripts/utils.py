@@ -332,3 +332,129 @@ def phenotype_with_gate_change(adata, gates, phenotype_matrix, sample_id, marker
         return adata_copy
 
 
+from scipy.spatial import Voronoi
+import time
+
+# Function to calculate major axis length (bounding box diagonal)
+def major_axis_length(polygon):
+    minx, miny, maxx, maxy = polygon.bounds
+    return np.sqrt((maxx - minx) ** 2 + (maxy - miny) ** 2)
+
+# Function to scale the farthest vertex toward the centroid
+def scale_pointy_vertex(polygon, scale_factor=0.5):
+    centroid = polygon.centroid
+    coords = np.array(polygon.exterior.coords)
+    # Calculate distances of each vertex to the centroid
+    distances = np.linalg.norm(coords - np.array([centroid.x, centroid.y]), axis=1)
+    # Find the index of the pointy vertex (farthest from the centroid)
+    max_dist_idx = np.argmax(distances)
+    # Move the pointy vertex closer to the centroid
+    pointy_vertex = coords[max_dist_idx]
+    new_vertex = centroid.x + scale_factor * (pointy_vertex[0] - centroid.x), centroid.y + scale_factor * (pointy_vertex[1] - centroid.y)
+    # Replace the pointy vertex with the new scaled vertex
+    coords[max_dist_idx] = new_vertex
+    # Return the modified polygon
+    return Polygon(coords)
+
+# Main function to apply filtering and scaling based on thresholds
+def process_polygons(gdf, scale_threshold, remove_threshold, scale_factor=0.5):
+    def process_polygon(polygon):
+        length = major_axis_length(polygon)
+        # Remove polygon if the major axis length exceeds remove_threshold
+        if length > remove_threshold:
+            return None
+        # Scale the pointy vertex if the major axis length exceeds scale_threshold
+        elif length > scale_threshold:
+            return scale_pointy_vertex(polygon, scale_factor)
+        # Otherwise, return the original polygon
+        return polygon
+    # Apply the function to each geometry in the GeoDataFrame
+    gdf['geometry'] = gdf['geometry'].apply(process_polygon)
+    # Remove None geometries (those that exceeded the remove_threshold)
+    return gdf.dropna(subset=['geometry'])
+
+def adataobs_to_voronoi_geojson(
+        df,
+        imageid:int, 
+        subset:list=None, 
+        category_1:str="phenotype", 
+        category_2:str="CN", 
+        output_path:str="../data/processed/"):
+
+    df = df.copy()
+    #subset per image
+    df = df[(df.imageid == imageid)]
+    logger.info(f"Processing {imageid}, loaded dataframe")
+
+    #subset per x,y
+    if subset is not None:
+        logger.info(f"Subsetting to {subset}")
+        assert len(subset) == 4, "subset must be a list of 4 integers"
+        x_min, x_max, y_min, y_max = subset
+        df = df[(df.X_centroid > x_min) &
+                (df.X_centroid < x_max) &
+                (df.Y_centroid > y_min) &
+                (df.Y_centroid < y_max)]
+
+    #clean subset up
+    df = df.reset_index(drop=True)
+    if 'Unnamed: 0' in df.columns:
+        df.drop(columns=['Unnamed: 0'], inplace=True)
+
+    logger.info("Running Voronoi")
+    # run Voronoi 
+    df = df[['X_centroid', 'Y_centroid', category_1, category_2]]    
+    vor = Voronoi(df[['X_centroid', 'Y_centroid']].values)
+    polygons = []
+    for i in range(len(df)):
+        polygon = Polygon([vor.vertices[vertex] for vertex in vor.regions[vor.point_region[i]]])
+        polygons.append(polygon)
+    df['geometry'] = polygons
+    logger.info("Voronoi done")
+
+    #transform to geodataframe
+    gdf = gpd.GeoDataFrame(df, geometry='geometry')
+    logger.info("Transformed to geodataframe")
+
+    # filter polygons that go outside of image
+    if subset is None:
+        x_min = gdf['X_centroid'].min()
+        x_max = gdf['X_centroid'].max()
+        y_min = gdf['Y_centroid'].min()
+        y_max = gdf['Y_centroid'].max()
+        logger.info(f"Bounding box: x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max {y_max}")
+
+    boundary_box = box(x_min, y_min, x_max, y_max)
+    gdf = gdf[gdf.geometry.apply(lambda poly: poly.within(boundary_box))]
+    logger.info("Filtered out infinite polygons")
+
+    # filter polygons that are too large
+    gdf['area'] = gdf['geometry'].area
+    gdf = gdf[gdf['area'] < gdf['area'].quantile(0.98)]
+    logger.info("Filtered out large polygons based on the 98% quantile")
+    # filter polygons that are very pointy
+    
+    # TODO improve filtering by pointiness
+    # gdf = process_polygons(gdf, scale_threshold=350, remove_threshold=400, scale_factor=0.3)
+    # logger.info("Filtered out pointy polygons")
+
+    # create geodataframe for each cell and their celltype
+    gdf2 = gdf.copy()
+    gdf2['objectType'] = 'cell'
+    gdf2['classification'] = gdf2[category_1]
+    
+    # merge polygons based on the CN column
+    logger.info("Merging polygons for cellular neighborhoods")
+    gdf3 = gdf.copy()
+    gdf3 = gdf3.dissolve(by=category_2)
+    gdf3[category_2] = gdf3.index
+    gdf3 = gdf3.explode(index_parts=True)
+    gdf3 = gdf3.reset_index(drop=True)
+    gdf3['classification'] = gdf3[category_2].astype(str)
+    
+    #export to geojson
+    datetime = time.strftime("%Y%m%d_%H%M")
+    gdf2.to_file(f"{output_path}/{datetime}_{imageid}_cells_voronoi.geojson", driver='GeoJSON')
+    gdf3.to_file(f"{output_path}/{datetime}_{imageid}_RCN_voronoi.geojson", driver='GeoJSON')
+
+    logger.success(f"Exported {imageid} to geojson")
