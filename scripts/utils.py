@@ -14,6 +14,8 @@ import geopandas as gpd
 
 import scimap as sm
 
+from scipy.spatial import Voronoi
+
 
 def read_quant(csv_data_path) -> ad.AnnData:
     """
@@ -332,8 +334,7 @@ def phenotype_with_gate_change(adata, gates, phenotype_matrix, sample_id, marker
         return adata_copy
 
 
-from scipy.spatial import Voronoi
-import time
+
 
 # Function to calculate major axis length (bounding box diagonal)
 def major_axis_length(polygon):
@@ -354,7 +355,7 @@ def scale_pointy_vertex(polygon, scale_factor=0.5):
     # Replace the pointy vertex with the new scaled vertex
     coords[max_dist_idx] = new_vertex
     # Return the modified polygon
-    return Polygon(coords)
+    return shapely.Polygon(coords)
 
 # Main function to apply filtering and scaling based on thresholds
 def process_polygons(gdf, scale_threshold, remove_threshold, scale_factor=0.5):
@@ -375,15 +376,22 @@ def process_polygons(gdf, scale_threshold, remove_threshold, scale_factor=0.5):
 
 def adataobs_to_voronoi_geojson(
         df,
-        imageid:int, 
+        imageid, 
         subset:list=None, 
         category_1:str="phenotype", 
-        category_2:str="CN", 
+        category_2=None, 
         output_path:str="../data/processed/"):
+    """ 
+    Description:
+    
+    """
+
+    logger.debug(f" df shape: {df.shape}")
 
     df = df.copy()
     #subset per image
-    df = df[(df.imageid == imageid)]
+    df = df[(df.imageid == str(imageid))]
+    logger.debug(f" df shape after imageid subset: {df.shape}")
     logger.info(f"Processing {imageid}, loaded dataframe")
 
     #subset per x,y
@@ -395,19 +403,19 @@ def adataobs_to_voronoi_geojson(
                 (df.X_centroid < x_max) &
                 (df.Y_centroid > y_min) &
                 (df.Y_centroid < y_max)]
-
-    #clean subset up
-    df = df.reset_index(drop=True)
-    if 'Unnamed: 0' in df.columns:
-        df.drop(columns=['Unnamed: 0'], inplace=True)
+        #clean subset up
+        df = df.reset_index(drop=True)
+        if 'Unnamed: 0' in df.columns:
+            df.drop(columns=['Unnamed: 0'], inplace=True)
 
     logger.info("Running Voronoi")
     # run Voronoi 
-    df = df[['X_centroid', 'Y_centroid', category_1, category_2]]    
+    # df = df[['X_centroid', 'Y_centroid', category_1, category_2]]    
     vor = Voronoi(df[['X_centroid', 'Y_centroid']].values)
     polygons = []
     for i in range(len(df)):
-        polygon = Polygon([vor.vertices[vertex] for vertex in vor.regions[vor.point_region[i]]])
+        polygon = shapely.Polygon(
+            [vor.vertices[vertex] for vertex in vor.regions[vor.point_region[i]]])
         polygons.append(polygon)
     df['geometry'] = polygons
     logger.info("Voronoi done")
@@ -424,7 +432,7 @@ def adataobs_to_voronoi_geojson(
         y_max = gdf['Y_centroid'].max()
         logger.info(f"Bounding box: x_min: {x_min}, x_max: {x_max}, y_min: {y_min}, y_max {y_max}")
 
-    boundary_box = box(x_min, y_min, x_max, y_max)
+    boundary_box = shapely.box(x_min, y_min, x_max, y_max)
     gdf = gdf[gdf.geometry.apply(lambda poly: poly.within(boundary_box))]
     logger.info("Filtered out infinite polygons")
 
@@ -444,17 +452,19 @@ def adataobs_to_voronoi_geojson(
     gdf2['classification'] = gdf2[category_1]
     
     # merge polygons based on the CN column
-    logger.info("Merging polygons for cellular neighborhoods")
-    gdf3 = gdf.copy()
-    gdf3 = gdf3.dissolve(by=category_2)
-    gdf3[category_2] = gdf3.index
-    gdf3 = gdf3.explode(index_parts=True)
-    gdf3 = gdf3.reset_index(drop=True)
-    gdf3['classification'] = gdf3[category_2].astype(str)
-    
+    if category_2:
+        logger.info("Merging polygons for cellular neighborhoods")
+        gdf3 = gdf.copy()
+        gdf3 = gdf3.dissolve(by=category_2)
+        gdf3[category_2] = gdf3.index
+        gdf3 = gdf3.explode(index_parts=True)
+        gdf3 = gdf3.reset_index(drop=True)
+        gdf3['classification'] = gdf3[category_2].astype(str)
+        
     #export to geojson
     datetime = time.strftime("%Y%m%d_%H%M")
     gdf2.to_file(f"{output_path}/{datetime}_{imageid}_cells_voronoi.geojson", driver='GeoJSON')
-    gdf3.to_file(f"{output_path}/{datetime}_{imageid}_RCN_voronoi.geojson", driver='GeoJSON')
+    if category_2:
+        gdf3.to_file(f"{output_path}/{datetime}_{imageid}_RCN_voronoi.geojson", driver='GeoJSON')
 
     logger.success(f"Exported {imageid} to geojson")
