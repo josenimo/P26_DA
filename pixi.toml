@@ -1,0 +1,18 @@
+[project]
+authors = ["Jose Nimo <nimojose@gmail.com>"]
+channels = ["conda-forge"]
+description = "Add a short description here"
+name = "P26E10_E11_ImageAnalysis"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.8,<3.12"
+jupyter = "*"
+loguru = ">=0.7.2,<0.8"
+geopandas = "*"
+
+[pypi-dependencies]
+scimap = ">2.2.0, <3"
