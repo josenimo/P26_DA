@@ -1,0 +1,10 @@
+{
+    "B_cells": "#ff7df3",
+    "CD4_Tcells": "#6efa6e",
+    "CD8_Tcells": "#2020d8",
+    "Cancer_cells": "#f55148",
+    "Vimentin_cells": "#866a21",
+    "Macrophages": "#ffff00",
+    "COL1A1_cells": "#ff7f0e",
+    "Unknown": "#7f7f7f"
+}
