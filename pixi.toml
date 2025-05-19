@@ -18,3 +18,4 @@ rasterio = ">=1.4.3,<2"
 
 [pypi-dependencies]
 scimap = ">2.2.0, <3"
+umap-learn = ">=0.5.7, <0.6"
